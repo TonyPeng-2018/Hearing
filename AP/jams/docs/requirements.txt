@@ -1,0 +1,2 @@
+six
+numpydoc>=0.5

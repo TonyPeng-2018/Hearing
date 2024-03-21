@@ -38,7 +38,7 @@ def test_epoch(model: nn.Module, device: torch.device,
     losses = []
     runtimes = []
     results = []
-
+    ap_outputfile = open('output.txt', 'w')
     with torch.no_grad():
         for batch_idx, (inp, tgt) in \
                 enumerate(tqdm(test_loader, desc='Test', ncols=100)):
@@ -77,6 +77,10 @@ def test_epoch(model: nn.Module, device: torch.device,
                 results.append(results_fn(
                     batch_idx * test_loader.batch_size,
                     inp, output, tgt, metrics_batch, output_dir=output_dir))
+                # ap_outputfile.write('tgt\n')
+                # ap_outputfile.write(str(tgt))
+                # ap_outputfile.write('metrics_batch\n')
+                # ap_outputfile.write(str(metrics_batch))
 
             losses += [loss.item()]
             if profiling:
@@ -101,6 +105,8 @@ def test_epoch(model: nn.Module, device: torch.device,
 
         if results_path is not None:
             torch.save(results, results_path)
+            # write label, gt is 1, others are 0
+
             logging.info("Saved results to %s" % results_path)
 
         avg_metrics = {k: np.mean(metrics[k]) for k in metrics.keys()}

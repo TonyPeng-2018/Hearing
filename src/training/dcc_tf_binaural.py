@@ -195,13 +195,29 @@ def format_results(idx, inputs, output, gt, metrics, output_dir=None):
     results = metrics
     results['metadata'] = inputs['metadata']
     results = deepcopy(results)
-
+    metadata = metrics['metadata']
     # Save audio
     if output_dir is not None:
         output = output['x']
         for i in range(output.shape[0]):
             out_dir = os.path.join(output_dir, f'{idx + i:03d}')
             os.makedirs(out_dir)
+
+            # changed! ouput classes
+            class_file = os.path.join(out_dir, 'class.txt')
+            classes = metadata[i]['sources']
+            chosen_sources = metadata[i]['chosen_sources']
+            classes_dict = {}
+            for id_0, s_0 in enumerate(classes):
+                if id_0 in chosen_sources:
+                    classes_dict[s_0['label']] = 1
+                else:
+                    classes_dict[s_0['label']] = 0
+            with open(class_file, 'w') as f:
+                for key, value in classes_dict.items():  
+                    f.write('%s:%s\n' % (key, value))
+            f.close()
+                
             torchaudio.save(
                 os.path.join(out_dir, 'mixture.wav'), inputs['mixture'][i], 44100)
             torchaudio.save(
@@ -222,6 +238,5 @@ if __name__ == "__main__":
         emb = torch.randn(1, 41)
 
         y = model({'mixture': x, 'label_vector': emb})
-
         print(f'{y.shape=}')
         print(f"First channel data:\n{y[0, 0]}")
