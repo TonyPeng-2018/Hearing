@@ -1,243 +1,317 @@
-import os
+
+# as simple as possible,
+
 import math
 from collections import OrderedDict
 from typing import Optional
 import logging
-from copy import deepcopy
 
-import numpy as np
 from torch import Tensor
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import torchaudio
 from torchmetrics.functional import(
     scale_invariant_signal_noise_ratio as si_snr,
     signal_noise_ratio as snr,
     signal_distortion_ratio as sdr,
     scale_invariant_signal_distortion_ratio as si_sdr)
 
-from src.training.dcc_tf import mod_pad, MaskNet
-from src.helpers.eval_utils import itd_diff, ild_diff
+from speechbrain.lobes.models.transformer.Transformer import PositionalEncoding
+import numpy as np
+import torch.nn as nn
+import torch
 
-class Net(nn.Module):
-    def __init__(self, label_len, L=8,
-                 model_dim=512, num_enc_layers=10,
-                 dec_buf_len=100, num_dec_layers=2,
-                 dec_chunk_size=72, out_buf_len=2,
-                 use_pos_enc=True, conditioning="mult", lookahead=True,
-                 pretrained_path=None):
-        super(Net, self).__init__()
-        self.L = L
-        self.out_buf_len = out_buf_len
-        self.model_dim = model_dim
-        self.lookahead = lookahead
+from torch import Tensor
+from typing import Type
+# inspired by https://gist.github.com/knsong/ac3b8205d86098d14754d02f908942ea
+# https://github.com/robmarkcole/resent18-from-scratch/blob/main/resnet18.py
+# class BasicBlock(nn.Module):
+#     """Basic Block for ResNet18 and ResNet34"""
+#     def __init__(
+#         self,in_channels,out_channels,stride):
+#         super(BasicBlock, self).__init__()
+#         # Multiplicative factor for the subsequent conv2d layer's output channels.
+#         # It is 1 for ResNet18 and ResNet34.
+#         if stride != 1:
+#             self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False) # here stride should be 1
 
-        # Input conv to convert input audio to a latent representation
-        kernel_size = 3 * L if lookahead else L
-        self.in_conv = nn.Sequential(
-            nn.Conv1d(in_channels=2,
-                      out_channels=model_dim, kernel_size=kernel_size, stride=L,
-                      padding=0, bias=False),
-            nn.ReLU())
+#         self.bn1 = nn.BatchNorm2d(out_channels)
+#         self.relu = nn.ReLU(inplace=True)
+#         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride = 1, padding=1, bias=False)
+#         self.bn2 = nn.BatchNorm2d(out_channels)
+#     def forward(self, x):
+#         identity = x # store copy of input tensor
+#         out = self.conv1(x)
+#         out = self.bn1(out)
+#         out = self.relu(out)
+#         out = self.conv2(out)
+#         out = self.bn2(out)
+#         out += identity # add input tensor to output tensor - residual connection
+#         out = self.relu(out)
+#         return out
 
-        # Label embedding layer
-        self.label_embedding = nn.Sequential(
-            nn.Linear(label_len, 512),
-            nn.LayerNorm(512),
-            nn.ReLU(),
-            nn.Linear(512, model_dim),
-            nn.LayerNorm(model_dim),
-            nn.ReLU())
+# class ResNet18(nn.Module):
+#     def __init__(self,audio_channels,num_layers):
+#         super(ResNet18, self).__init__()
+#         layers = [2, 2, 2, 2]
+#         self.in_channels = 64
+#         self.conv1 = nn.Conv2d(
+#             in_channels=audio_channels,
+#             out_channels=self.in_channels,
+#             kernel_size=7,
+#             stride=2,
+#             padding=3,
+#             bias=False
+#         )
+#         self.bn1 = nn.BatchNorm2d(self.in_channels)
+#         self.relu = nn.ReLU(inplace=True)
+#         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+#         self.layer1 = self._make_layer(block, 64, layers[0])
+#         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+#         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+#         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+#         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+#         self.fc = nn.Linear(512*self.expansion, num_classes)
 
-        # Mask generator
-        self.mask_gen = MaskNet(
-            model_dim=model_dim, num_enc_layers=num_enc_layers,
-            dec_buf_len=dec_buf_len,
-            dec_chunk_size=dec_chunk_size, num_dec_layers=num_dec_layers,
-            use_pos_enc=use_pos_enc, conditioning=conditioning)
+#     def _make_layer(self,out_channels,blocks,stride):
+#         if stride != 1:
+#             """
+#             This should pass from `layer2` to `layer4` or 
+#             when building ResNets50 and above. Section 3.3 of the paper
+#             Deep Residual Learning for Image Recognition
+#             (https://arxiv.org/pdf/1512.03385v1.pdf).
+#             """
+#             downsample = nn.Sequential(
+#                 nn.Conv2d(self.in_channels,out_channels,kernel_size=1,stride=stride,bias=False),
+#                 nn.BatchNorm2d(out_channels)
+#                 )
+#         layers = [] # for storing the layers
+#         layers.append(
+#             block(
+#                 self.in_channels, out_channels, stride, self.expansion, downsample
+#             )
+#         )
+#         self.in_channels = out_channels * self.expansion
+#         for i in range(1, blocks):
+#             layers.append(block(
+#                 self.in_channels,
+#                 out_channels,
+#                 expansion=self.expansion
+#             ))
+#         return nn.Sequential(*layers)
+#     def forward(self, x: Tensor) -> Tensor:
+#         x = self.conv1(x)
+#         x = self.bn1(x)
+#         x = self.relu(x)
+#         x = self.maxpool(x)
+#         x = self.layer1(x)
+#         x = self.layer2(x)
+#         x = self.layer3(x)
+#         x = self.layer4(x)
+#         # The spatial dimension of the final layer's feature
+#         # map should be (7, 7) for all ResNets.
+#         # print('Dimensions of the last convolutional feature map: ', x.shape)
+#         x = self.avgpool(x)
+#         x = torch.flatten(x, 1)
+#         x = self.fc(x)
+#         return x
 
-        # Output conv layer
-        self.out_conv = nn.Sequential(
-            nn.ConvTranspose1d(
-                in_channels=model_dim, out_channels=2,
-                kernel_size=(out_buf_len + 1) * L,
-                stride=L,
-                padding=out_buf_len * L, bias=False),
-            nn.Tanh())
+# don't wannat change it more
 
-        if pretrained_path is not None:
-            state_dict = torch.load(pretrained_path)['model_state_dict']
+class BasicBlock(nn.Module):
+    """Basic Block for ResNet18 and ResNet34"""
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        stride: int = 1,
+        expansion: int = 1,
+        downsample: nn.Module = None
+    ) -> None:
+        super(BasicBlock, self).__init__()
+        # Multiplicative factor for the subsequent conv2d layer's output channels.
+        # It is 1 for ResNet18 and ResNet34.
+        self.expansion = expansion
+        self.downsample = downsample
+        self.conv1 = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            stride=stride,
+            padding=1,
+            bias=False
+        )
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(
+            out_channels,
+            out_channels*self.expansion,
+            kernel_size=3,
+            padding=1,
+            bias=False
+        )
+        self.bn2 = nn.BatchNorm2d(out_channels*self.expansion)
+    def forward(self, x: Tensor) -> Tensor:
+        identity = x # store copy of input tensor
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        if self.downsample is not None:
+            identity = self.downsample(x)
+        out += identity # add input tensor to output tensor - residual connection
+        out = self.relu(out)
+        return out
 
-            # Load all the layers except label_embedding and freeze them
-            for name, param in self.named_parameters():
-                if 'label_embedding' not in name:
-                    param.data = state_dict[name]
-                    param.requires_grad = False
+class ResNet(nn.Module):
+    def __init__(
+        self,
+        img_channels: int, # either grayscale or RGB images
+        num_layers: int,
+        block: Type[BasicBlock],
+        num_classes: int = 1000
+    ) -> None:
+        super(ResNet, self).__init__()
+        if num_layers == 18:
+            # The following `layers` list defines the number of `BasicBlock`
+            # to use to build the network and how many basic blocks to stack
+            # together.
+            layers = [2, 2, 2, 2]
+            self.expansion = 1
+        self.in_channels = 64
+        # All ResNets (18 to 152) contain a Conv2d => BN => ReLU for the first
+        # three layers. Here, kernel size is 7.
+        self.conv1 = nn.Conv2d(
+            in_channels=img_channels,
+            out_channels=self.in_channels,
+            kernel_size=7,
+            stride=2,
+            padding=3,
+            bias=False
+        )
+        self.bn1 = nn.BatchNorm2d(self.in_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
 
-    def init_buffers(self, batch_size, device):
-        enc_buf = self.mask_gen.encoder.init_ctx_buf(batch_size, device)
-        dec_buf = self.mask_gen.decoder.init_ctx_buf(batch_size, device)
-        out_buf = torch.zeros(batch_size, self.model_dim, self.out_buf_len,
-                              device=device)
-        return enc_buf, dec_buf, out_buf
+    def _make_layer(
+        self,
+        block: Type[BasicBlock],
+        out_channels: int,
+        blocks: int,
+        stride: int = 1
+    ) -> nn.Sequential:
+        downsample = None
+        if stride != 1:
+            """
+            This should pass from `layer2` to `layer4` or 
+            when building ResNets50 and above. Section 3.3 of the paper
+            Deep Residual Learning for Image Recognition
+            (https://arxiv.org/pdf/1512.03385v1.pdf).
+            """
+            downsample = nn.Sequential(
+                nn.Conv2d(
+                    self.in_channels,
+                    out_channels*self.expansion,
+                    kernel_size=1,
+                    stride=stride,
+                    bias=False
+                ),
+                nn.BatchNorm2d(out_channels * self.expansion),
+            )
+        layers = [] # for storing the layers
+        layers.append(
+            block(
+                self.in_channels, out_channels, stride, self.expansion, downsample
+            )
+        )
+        self.in_channels = out_channels * self.expansion
+        for i in range(1, blocks):
+            layers.append(block(
+                self.in_channels,
+                out_channels,
+                expansion=self.expansion
+            ))
+        return nn.Sequential(*layers)
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        # we need the embedding so we stop it here.
+        return x
+
+# we need a decoder here
+# https://github.com/julianstastny/VAE-ResNet18-PyTorch/blob/master/model.py
+# https://blog.csdn.net/dcrmg/article/details/84396211
+class BasicBlockDec(nn.Module):
+
+    def __init__(self, in_channel, stride=1):
+        super().__init__()
+        out_channel = in_channel // 2
+        self.conv2 = nn.Conv2d(in_channel, in_channel, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(in_channel)
+        # self.bn1 could have been placed here, but that messes up the order of the layers when printing the class
+
+        if stride == 1:
+            self.conv1 = nn.Conv2d(in_channel, out_channel, kernel_size=3, stride=1, padding=1, bias=False)
+            self.bn1 = nn.BatchNorm2d(out_channel)
+            self.shortcut = nn.Sequential() # question, should we add something here?
+        else:
+            self.conv1 = nn.convtranspose2d(in_channel, out_channel, kernel_size=3, scale_factor=stride)
+            self.bn1 = nn.BatchNorm2d(out_channel)
+            self.shortcut = nn.Sequential(
+                nn.convtranspose2d(in_channel, out_channel, kernel_size=3, scale_factor=stride),
+                nn.BatchNorm2d(out_channel)
+                out = torch.relu(out)
+            )
+
+    def forward(self, x):
+        out = torch.relu(self.bn2(self.conv2(x)))
+        out = self.bn1(self.conv1(out))
+        out += self.shortcut(x)
+        return out
+class ResNet18Dec(nn.Module):
+
+    def __init__(self, num_Blocks=[2,2,2,2], z_dim=10, in_channel=1):
+        super().__init__()
+        self.in_channel = 512
+
+        self.linear = nn.Linear(z_dim, 512)
+
+        self.layer4 = self._make_layer(BasicBlockDec, 256, num_Blocks[3], stride=2)
+        self.layer3 = self._make_layer(BasicBlockDec, 128, num_Blocks[2], stride=2)
+        self.layer2 = self._make_layer(BasicBlockDec, 64, num_Blocks[1], stride=2)
+        self.layer1 = self._make_layer(BasicBlockDec, 64, num_Blocks[0], stride=1)
+        self.conv1 = nn.convtranspose2d(64, in_channel, kernel_size=3, scale_factor=2)
+
+    def _make_layer(self, BasicBlockDec, out_channel, num_Blocks, stride):
+        strides = [stride] + [1]*(num_Blocks-1)
+        layers = []
+        for stride in reversed(strides):
+            layers += [BasicBlockDec(self.in_channel, stride)]
+        self.in_channel = out_channel
+        return nn.Sequential(*layers)
+
+    def forward(self, z):
+        x = self.linear(z)
+        x = x.view(z.size(0), 512, 1, 1)
+        x = F.interpolate(x, scale_factor=4)
+        x = self.layer4(x)
+        x = self.layer3(x)
+        x = self.layer2(x)
+        x = self.layer1(x)
+        x = torch.sigmoid(self.conv1(x)) # the output is 0 - 1
+        return x
     
-    def predict(self, x, label, enc_buf, dec_buf, out_buf):
-        # Generate latent space representation of the input
-        x = self.in_conv(x)
-
-        # Generate label embedding
-        l = self.label_embedding(label) # [B, label_len] --> [B, channels]
-        l = l.unsqueeze(1).unsqueeze(-1) # [B, 1, channels, 1]
-
-        # Generate mask corresponding to the label
-        m, enc_buf, dec_buf = self.mask_gen(x, l, enc_buf, dec_buf)
-
-        # Apply mask and decode
-        x = x * m
-        x = torch.cat((out_buf, x), dim=-1)
-        out_buf = x[..., -self.out_buf_len:]
-        x = self.out_conv(x)
-
-        return x, enc_buf, dec_buf, out_buf
-
-    def forward(self, inputs, init_enc_buf=None, init_dec_buf=None,
-                init_out_buf=None, pad=True, writer=None, step=None, idx=None):
-        """
-        Extracts the audio corresponding to the `label` in the given
-        `mixture`. Generates `chunk_size` samples per iteration.
-        Args:
-            mixed: [B, n_mics, T]
-                input audio mixture
-            label: [B, num_labels]
-                one hot label
-        Returns:
-            out: [B, n_spk, T]
-                extracted audio with sounds corresponding to the `label`
-        """
-        x, label = inputs['mixture'], inputs['label_vector']
-
-        if init_enc_buf is None or init_dec_buf is None or init_out_buf is None:
-            assert init_enc_buf is None and \
-                   init_dec_buf is None and \
-                   init_out_buf is None, \
-                "Both buffers have to initialized, or " \
-                "both of them have to be None."
-            enc_buf, dec_buf, out_buf = self.init_buffers(
-                x.shape[0], x.device)
-        else:
-            enc_buf, dec_buf, out_buf = \
-                init_enc_buf, init_dec_buf, init_out_buf
-
-        mod = 0
-        if pad:
-            pad_size = (self.L, self.L) if self.lookahead else (0, 0)
-            x, mod = mod_pad(x, chunk_size=self.L, pad=pad_size)
-
-        x, enc_buf, dec_buf, out_buf = self.predict(
-            x, label, enc_buf, dec_buf, out_buf)
-
-        # Remove mod padding, if present.
-        if mod != 0:
-            x = x[:, :, :-mod]
-        
-        out = {'x': x}
-
-        if init_enc_buf is None:
-            return out
-        else:
-            return out, enc_buf, dec_buf, out_buf
-
-# Define optimizer, loss and metrics
-
-def optimizer(model, data_parallel=False, **kwargs):
-    params = [p for p in model.parameters() if p.requires_grad]
-    return optim.Adam(params, **kwargs)
-
-def loss(_output, tgt):
-    pred = _output['x']
-    return -0.9 * snr(pred, tgt).mean() - 0.1 * si_snr(pred, tgt).mean()
-def metrics(inputs, _output, gt):
-    """ Function to compute metrics """
-    mixed = inputs['mixture']
-    output = _output['x']
-    metrics = {}
-
-    def metric_i(metric, src, pred, tgt):
-        _vals = []
-        for s, t, p in zip(src, tgt, pred):
-            _vals.append(torch.mean((metric(p, t) - metric(s, t))).cpu().item())
-        return _vals
-
-    for m_fn in [snr, si_snr]:
-        metrics[m_fn.__name__] = metric_i(m_fn,
-                                          mixed[:, :gt.shape[1], :],
-                                          output,
-                                          gt)
-
-    return metrics
-
-def test_metrics(inputs, _output, gt):
-    test_metrics = metrics(inputs, _output, gt)
-    output = _output['x']
-    delta_itds, delta_ilds, snrs = [], [], []
-    for o, g in zip(output, gt):
-        delta_itds.append(itd_diff(o.cpu(), g.cpu(), sr=44100))
-        delta_ilds.append(ild_diff(o.cpu().numpy(), g.cpu().numpy()))
-        snrs.append(torch.mean(si_snr(o, g)).cpu().item())
-    test_metrics['delta_ITD'] = delta_itds
-    test_metrics['delta_ILD'] = delta_ilds
-    test_metrics['si_snr'] = snrs
-    return test_metrics
-
-def format_results(idx, inputs, output, gt, metrics, output_dir=None):
-    results = metrics
-    results['metadata'] = inputs['metadata']
-    results = deepcopy(results)
-    metadata = metrics['metadata']
-    # Save audio
-    if output_dir is not None:
-        output = output['x']
-        for i in range(output.shape[0]):
-            out_dir = os.path.join(output_dir, f'{idx + i:03d}')
-            os.makedirs(out_dir)
-
-            # changed! ouput classes
-            class_file = os.path.join(out_dir, 'class.txt')
-            classes = metadata[i]['sources']
-            chosen_sources = metadata[i]['chosen_sources']
-            classes_dict = {}
-            for id_0, s_0 in enumerate(classes):
-                if id_0 in chosen_sources:
-                    classes_dict[s_0['label']] = 1
-                else:
-                    classes_dict[s_0['label']] = 0
-            with open(class_file, 'w') as f:
-                for key, value in classes_dict.items():  
-                    f.write('%s:%s\n' % (key, value))
-            f.close()
-                
-            torchaudio.save(
-                os.path.join(out_dir, 'mixture.wav'), inputs['mixture'][i], 44100)
-            torchaudio.save(
-                os.path.join(out_dir, 'gt.wav'), gt[i], 44100)
-            torchaudio.save(
-                os.path.join(out_dir, 'output.wav'), output[i], 44100)
-
-    return results
-
-if __name__ == "__main__":
-    torch.random.manual_seed(0)
-
-    model = Net(41)
-    model.eval()
-
-    with torch.no_grad():
-        x = torch.randn(1, 2, 417)
-        emb = torch.randn(1, 41)
-
-        y = model({'mixture': x, 'label_vector': emb})
-
-        print(f'{y.shape=}')
-        print(f"First channel data:\n{y[0, 0]}")
+# VAE model 
+# https://github.com/julianstastny/VAE-ResNet18-PyTorch/blob/master/model.py

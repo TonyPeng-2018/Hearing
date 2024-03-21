@@ -42,7 +42,7 @@ def train_epoch(model: nn.Module, device: torch.device,
     metrics = {}
 
     tensorboard_trace_handler = torch.profiler.tensorboard_trace_handler(
-        writer.log_dir)
+        writer.log_dir) # analyze theoperation in the model, leave it here
     with tqdm(total=len(train_loader), desc='Train', ncols=100) as t:
     #     with torch.profiler.profile(
     #         schedule=torch.profiler.schedule(

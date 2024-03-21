@@ -15,6 +15,7 @@ from torchmetrics.functional import(
     scale_invariant_signal_distortion_ratio as si_sdr)
 
 from speechbrain.lobes.models.transformer.Transformer import PositionalEncoding
+import numpy as np
 
 def mod_pad(x, chunk_size, pad):
     # Mod pad the input to perform integer number of
@@ -506,14 +507,81 @@ def metrics(mixed, output, gt):
 
     return metrics
 
-if __name__ == '__main__':
-    net = CausalTransformerDecoder(
-        model_dim=8, ctx_len=4, chunk_size=4, num_layers=2, nhead=4, conditioning='attn',
-        use_pos_enc=True, ff_dim=16
-    )
-    x = torch.randn(2, 8, 16)
-    e = torch.randn(2, 2, 8, 2)
-    buf = torch.rand(2, 2, 4, 8)
-    out = net(x, e, buf)
-    print(net)
-    print(out[0].shape, out[1].shape)
+# ------------------------------------------------------------------------------------------------- #
+# inherited from https://github.com/chendaichao/VAE-pytorch/blob/master/Models/VAE/model.py
+# https://zhuanlan.zhihu.com/p/348498294
+
+class Flatten(nn.Module):
+    def __init__(self):
+        super(Flatten, self).__init__()
+    def forward(self, x):
+        batch_size = x.shape[0]
+        return x.view(batch_size, -1)
+
+class MLP(nn.Module):
+    def __init__(self, hidden_size, last_activation = True):
+        super(MLP, self).__init__()
+        # here hidden_size is a list, we need to create the layers by the list
+        # https://discuss.pytorch.org/t/append-for-nn-sequential-or-directly-converting-nn-modulelist-to-nn-sequential/7104/3
+        self.mlp = nn.Sequential()
+        for i in range(len(hidden_size)-1):
+            in_dim = hidden_size[i]
+            out_dim = hidden_size[i+1]
+            self.mlp.add_model(("Linear_%d" % i, nn.Linear(in_dim, out_dim)))
+            if (i < len(hidden_size)-2) or ((i == len(hidden_size) - 2) and (last_activation)):
+                self.mlp.add_model(("BatchNorm_%d" % i, nn.BatchNorm1d(out_dim)))
+                self.mlp.add_model(("ReLU_%d" % i, nn.ReLU(inplace=True)))
+    def forward(self, x):
+        return self.mlp(x)
+
+# add this to the encoder
+    # if (y is None):
+    #         return self.calc_mean(x), self.calc_logvar(x)
+    #     else:
+    #         return self.calc_mean(torch.cat((x, y), dim=1)), self.calc_logvar(torch.cat((x, y), dim=1))
+# end
+    
+class cVAE():
+    # the cVAE is partial VAE which only include the decoder part. 
+    # The embedding is from masked model which is embedding*mask (not binary)
+    # the decoder part is from the original model. 
+    def __init__(self, shape, nclass, nhid = 16, ncond = 16):
+        super(cVAE, self).__init__()
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.dim = nhid
+        self.decoder = Decoder(None) ### revise here
+        self.label_embedding = nn.Embedding(nclass, ncond)
+        
+    def sampling(self, mean, logvar):
+        eps = torch.randn(mean.shape).to(self.device)
+        sigma = 0.5 * torch.exp(logvar)
+        return mean + eps * sigma
+    
+    def forward(self, x, y):
+        y = self.label_embedding(y)
+        mean, logvar = self.encoder(x, y) # get this from encoder
+        z = self.sampling(mean, logvar)
+        return self.decoder(z, y), mean, logvar
+    
+    def generate(self, class_idx):
+        if (type(class_idx) is int):
+            class_idx = torch.tensor(class_idx)
+        class_idx = class_idx.to(self.device)
+        if (len(class_idx.shape) == 0):
+            batch_size = None
+            class_idx = class_idx.unsqueeze(0)
+            z = torch.randn((1, self.dim)).to(self.device)
+        else:
+            batch_size = class_idx.shape[0]
+            z = torch.randn((batch_size, self.dim)).to(self.device) 
+        y = self.label_embedding(class_idx)
+        res = self.decoder(z, y)
+        if not batch_size:
+            res = res.squeeze(0)
+        return res
+    
+    BCE_loss = nn.BCELoss(reduction = "sum")
+    def loss(X, X_hat, mean, logvar):
+        reconstruction_loss = BCE_loss(X_hat, X)
+        KL_divergence = 0.5 * torch.sum(-1 - logvar + torch.exp(logvar) + mean**2)
+        return reconstruction_loss + KL_divergence
