@@ -53,10 +53,10 @@ htmlcov/
 *.log
 
 # Data
-data/*/
-AP/data_folder/*
-AP/person_result/*
-result/*/
+SemanticHearing/data/*/
+Phear/data_folder/*
+Phear/person_result/*
+SemanticHearing/result/*/
 
 # Model files
 *.onnx

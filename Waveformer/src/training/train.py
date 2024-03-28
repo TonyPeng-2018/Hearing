@@ -24,12 +24,14 @@ from torchmetrics.functional import(
 
 from src.helpers import utils
 from src.training.eval import test_epoch
+from src.training.synthetic_dataset import FSDSoundScapesDataset as Dataset
+from src.training.synthetic_dataset import tensorboard_add_sample
 
 def train_epoch(model: nn.Module, device: torch.device,
                 optimizer: optim.Optimizer,
                 train_loader: torch.utils.data.dataloader.DataLoader,
                 n_items: int, epoch: int = 0,
-                writer: SummaryWriter = None) -> float:
+                writer: SummaryWriter = None, data_params = None) -> float:
 
     """
     Train a single epoch.
@@ -41,70 +43,53 @@ def train_epoch(model: nn.Module, device: torch.device,
     losses = []
     metrics = {}
 
-    tensorboard_trace_handler = torch.profiler.tensorboard_trace_handler(
-        writer.log_dir) # analyze theoperation in the model, leave it here
     with tqdm(total=len(train_loader), desc='Train', ncols=100) as t:
-    #     with torch.profiler.profile(
-    #         schedule=torch.profiler.schedule(
-    #             skip_first=10,
-    #             wait=2,
-    #             warmup=2,
-    #             active=6,
-    #             repeat=2),
-    #         on_trace_ready=tensorboard_trace_handler,
-    #         profile_memory=True,
-    #         with_stack=True
-    #     ) as profiler:
-            for batch_idx, (inp, tgt) in enumerate(train_loader):
-                # Move data to device
-                inp, tgt = train_loader.dataset.to(inp, tgt, device)
+        for batch_idx, (mixed, label, gt) in enumerate(train_loader):
+            mixed = mixed.to(device)
+            label = label.to(device)
+            gt = gt.to(device)
 
-                # Reset grad
-                optimizer.zero_grad()
+            # Reset grad
+            optimizer.zero_grad()
 
-                # Run through the model
-                output = model(inp)
+            # Run through the model
+            output = model(mixed, label)
 
-                # Compute loss
-                loss = network.loss(output, tgt)
+            # Compute loss
+            loss = network.loss(output, gt)
 
-                losses.append(loss.item())
+            losses.append(loss.item())
 
-                # Backpropagation
-                loss.backward()
+            # Backpropagation
+            loss.backward()
 
-                # Gradient clipping
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
 
-                # Update the weights
-                optimizer.step()
+            # Update the weights
+            optimizer.step()
 
-                # Compute metrics
-                output = train_loader.dataset.output_detach(output)
-                metrics_batch = network.metrics(inp, output, tgt)
-                for k in metrics_batch.keys():
-                    if not k in metrics:
-                        metrics[k] = metrics_batch[k]
-                    else:
-                        metrics[k] += metrics_batch[k]
+            metrics_batch = network.metrics(mixed.detach(), output.detach(),
+                                            gt.detach())
+            for k in metrics_batch.keys():
+                if not k in metrics:
+                    metrics[k] = metrics_batch[k]
+                else:
+                    metrics[k] += metrics_batch[k]
 
-                output = train_loader.dataset.output_to(output, 'cpu')
-                inp, tgt = train_loader.dataset.to(inp, tgt, 'cpu')
-                if writer is not None and batch_idx == 0:
-                    train_loader.dataset.tensorboard_add_sample(
-                        writer, tag='Train',
-                        sample=(inp, output, tgt),
-                        step=epoch)
+            if writer is not None and batch_idx == 0:
+                tensorboard_add_sample(
+                    writer, tag='Train',
+                    sample=(mixed.detach()[:8], label.detach()[:8],
+                            gt.detach()[:8], output.detach()[:8]),
+                    step=epoch, params=data_params)
 
-                # Step the profiler
-                # profiler.step()
+            # Show current loss in the progress meter
+            t.set_postfix(loss='%.05f'%loss.item())
+            t.update()
 
-                # Show current loss in the progress meter
-                t.set_postfix(loss='%.05f'%loss.item())
-                t.update()
-
-                if n_items is not None and batch_idx == n_items:
-                    break
+            if n_items is not None and batch_idx == n_items:
+                break
 
     avg_metrics = {k: np.mean(metrics[k]) for k in metrics.keys()}
     avg_metrics['loss'] = np.mean(losses)
@@ -115,17 +100,19 @@ def train_epoch(model: nn.Module, device: torch.device,
 
     return avg_metrics
 
+
 def train(args: argparse.Namespace):
     """
     Train the network.
     """
+
     # Load dataset
-    data_train = utils.import_attr(args.train_dataset)(**args.train_data_args)
-    logging.info("Loaded train dataset containing %d elements" %
-                 (len(data_train)))
-    data_val = utils.import_attr(args.val_dataset)(**args.val_data_args)
-    logging.info("Loaded test dataset containing %d elements" %
-                 (len(data_val)))
+    data_train = Dataset(**args.train_data)
+    logging.info("Loaded train dataset at %s containing %d elements" %
+                 (args.train_data['input_dir'], len(data_train)))
+    data_val = Dataset(**args.val_data)
+    logging.info("Loaded test dataset at %s containing %d elements" %
+                 (args.val_data['input_dir'], len(data_val)))
 
     # Set up the device and workers.
     use_cuda = args.use_cuda and torch.cuda.is_available()
@@ -151,12 +138,12 @@ def train(args: argparse.Namespace):
 
     # Set up data loaders
     #print(args.batch_size, args.eval_batch_size)
-    train_loader = torch.utils.data.DataLoader(
-        data_train, batch_size=args.batch_size, shuffle=True,
-        collate_fn=data_train.collate_fn, **kwargs)
-    val_loader = torch.utils.data.DataLoader(
-        data_val, batch_size=args.eval_batch_size, collate_fn=data_val.collate_fn,
-        **kwargs)
+    train_loader = torch.utils.data.DataLoader(data_train,
+                                               batch_size=args.batch_size,
+                                               shuffle=True, **kwargs)
+    val_loader = torch.utils.data.DataLoader(data_val,
+                                             batch_size=args.eval_batch_size,
+                                             **kwargs)
 
     # Set up model
     model = network.Net(**args.model_params)
@@ -207,12 +194,14 @@ def train(args: argparse.Namespace):
             #print("---- begin trianivg")
             curr_train_metrics = train_epoch(model, device, optimizer,
                                              train_loader, args.n_train_items,
-                                             epoch=epoch, writer=args.writer)
+                                             epoch=epoch, writer=args.writer,
+                                             data_params=args.train_data)
             #raise KeyboardInterrupt
             curr_test_metrics = test_epoch(model, device, val_loader,
                                            args.n_test_items, network.loss,
                                            network.metrics, epoch=epoch,
-                                           writer=args.writer)
+                                           writer=args.writer,
+                                           data_params=args.val_data)
             # LR scheduler
             if epoch >= args.fix_lr_epochs:
                 lr_scheduler.step(curr_test_metrics[base_metric])
@@ -301,8 +290,6 @@ if __name__ == '__main__':
     # Load model and training params
     params = utils.Params(os.path.join(args.exp_dir, 'config.json'))
     for k, v in params.__dict__.items():
-        if k in vars(args):
-            logging.warning("Argument %s is overwritten by config file." % k)
         vars(args)[k] = v
 
     # Initialize tensorboard writer
