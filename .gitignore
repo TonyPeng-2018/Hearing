@@ -53,10 +53,11 @@ htmlcov/
 *.log
 
 # Data
-SemanticHearing/data/*/
+SemanticHearing/data/BinauralCuratedDataset/*
+SemanticHearing/data/BinauralCuratedDataset.tar
+SemanticHearing/result/*/
 Phear/data_folder/*
 Phear/person_result/*
-SemanticHearing/result/*/
 
 # Model files
 *.onnx
