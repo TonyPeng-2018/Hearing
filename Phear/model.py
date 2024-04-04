@@ -149,7 +149,7 @@ class ResNet(nn.Module):
 class BasicBlockDec(nn.Module):
     def __init__(self, in_channel, stride=1):
         super().__init__()
-        out_channel = in_channel // 2
+        out_channel = in_channel // 2 
         self.conv2 = nn.Conv2d(
             in_channel, in_channel, kernel_size=3, stride=1, padding=1, bias=False
         )
@@ -171,7 +171,7 @@ class BasicBlockDec(nn.Module):
                 nn.ConvTranspose2d(
                     in_channel, out_channel, kernel_size=3
                 ),
-                nn.BatchNorm2d(out_channel),
+                nn.BatchNorm2d(out_channel),                                 
                 nn.ReLU()
             )
 
