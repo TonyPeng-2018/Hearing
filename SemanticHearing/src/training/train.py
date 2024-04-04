@@ -359,7 +359,7 @@ if __name__ == "__main__":
     utils.set_logger(os.path.join(args.exp_dir, "train.log"))
 
     # Load model and training params
-    params = utils.Params(os.path.join(args.exp_dir, "config.json"))
+    params = utils.Params(os.path.join(args.exp_dir, "config_tintin.json"))
     for k, v in params.__dict__.items():
         if k in vars(args):
             logging.warning("Argument %s is overwritten by config file." % k)
