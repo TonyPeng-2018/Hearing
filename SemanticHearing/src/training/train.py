@@ -3,7 +3,6 @@ The main training script for training on synthetic data
 """
 
 import argparse
-import multiprocessing
 import os
 import logging
 from pathlib import Path
@@ -153,27 +152,11 @@ def train(args: argparse.Namespace):
     data_val = utils.import_attr(args.val_dataset)(**args.val_data_args)
     logging.info("Loaded test dataset containing %d elements" % (len(data_val)))
 
-    # Set up the device and workers.
-    use_cuda = args.use_cuda and torch.cuda.is_available()
-    if use_cuda:
-        gpu_ids = (
-            args.gpu_ids
-            if args.gpu_ids is not None
-            else range(torch.cuda.device_count())
-        )
-        device_ids = [_ for _ in gpu_ids]
-        data_parallel = len(device_ids) > 1
-        device = "cuda:%d" % device_ids[0]
-        torch.cuda.set_device(device_ids[0])
-        logging.info("Using CUDA devices: %s" % str(device_ids))
-    else:
-        data_parallel = False
-        device = torch.device("cpu")
-        logging.info("Using device: CPU")
+    # Set up the device and workers
+    use_cuda, device_ids, data_parallel, device = utils.set_cuda(args)
 
     # Set multiprocessing params
-    num_workers = min(multiprocessing.cpu_count(), args.n_workers)
-    kwargs = {"num_workers": num_workers, "pin_memory": True} if use_cuda else {}
+    num_workers, kwargs = utils.set_multi_processing(args, use_cuda)
 
     # Set up data loaders
     # print(args.batch_size, args.eval_batch_size)
@@ -208,7 +191,7 @@ def train(args: argparse.Namespace):
     optimizer = network.optimizer(model, **args.optim, data_parallel=data_parallel)
     logging.info("Learning rates initialized to:" + utils.format_lr_info(optimizer))
 
-    lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, **args.lr_sched)
+    lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, **args.lr_sched) # what is it?
     logging.info(
         "Initialized LR scheduler with params: fix_lr_epochs=%d %s"
         % (args.fix_lr_epochs, str(args.lr_sched))
@@ -220,7 +203,7 @@ def train(args: argparse.Namespace):
 
     # Load the model if `args.start_epoch` is greater than 0. This will load the
     # model from epoch = `args.start_epoch - 1`
-    assert args.start_epoch >= 0, "start_epoch must be greater than 0."
+    # assert args.start_epoch >= 0, "start_epoch must be greater than 0."
     if args.start_epoch > 0:
         checkpoint_path = os.path.join(args.exp_dir, "%d.pt" % (args.start_epoch - 1))
         _, train_metrics, val_metrics = utils.load_checkpoint(
@@ -235,7 +218,7 @@ def train(args: argparse.Namespace):
 
     # Training loop
     try:
-        torch.autograd.set_detect_anomaly(args.detect_anomaly)
+        torch.autograd.set_detect_anomaly(args.detect_anomaly) # enable or disable anomaly detection during gradient computation.
         for epoch in range(args.start_epoch, args.epochs + 1):
             logging.info("Epoch %d:" % epoch)
             checkpoint_file = os.path.join(args.exp_dir, "%d.pt" % epoch)
@@ -394,12 +377,10 @@ if __name__ == "__main__":
             dir=tensorboard_dir,
             name=os.path.basename(args.exp_dir),
         )
-
     exec("import %s as network" % args.model)
     logging.info("Imported the model from '%s'." % args.model)
-
     train(args)
 
     args.writer.close()
-    if args.wandb:
+    if args.wandb: # pylint: disable=using-constant-test
         wandb.finish()

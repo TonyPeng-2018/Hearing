@@ -14,6 +14,7 @@ from torchmetrics.functional import(
     signal_distortion_ratio as sdr,
     scale_invariant_signal_distortion_ratio as si_sdr)
 import matplotlib.pyplot as plt
+import multiprocessing
 
 class Params():
     """Class that loads hyperparameters from a json file.
@@ -216,3 +217,44 @@ def format_lr_info(optimizer):
             i, sum([p.numel() for p in pg['params']]) / (1024 ** 2), pg['lr'])
     return lr_info
 
+
+
+### move some function here
+# Set up the device and workers.
+def set_cuda(args):
+    """
+    Sets up the device and workers for training.
+    Args:
+        args: (argparse.ArgumentParser) command-line arguments
+    """
+    use_cuda = args.use_cuda and torch.cuda.is_available()
+    if use_cuda:
+        gpu_ids = (
+            args.gpu_ids
+            if args.gpu_ids is not None
+            else range(torch.cuda.device_count())
+        )
+        device_ids = [_ for _ in gpu_ids]
+        data_parallel = len(device_ids) > 1
+        device = "cuda:%d" % device_ids[0]
+        torch.cuda.set_device(device_ids[0])
+        logging.info("Using CUDA devices: %s" % str(device_ids))
+    else:
+        data_parallel = False
+        device = torch.device("cpu")
+        logging.info("Using device: CPU")
+    return use_cuda, device_ids, data_parallel, device
+
+# Set multiprocessing params
+def set_multi_processing(args, use_cuda):
+    """
+    Sets up the number of workers for data loading.
+    Args:
+        args: (argparse.ArgumentParser) command-line arguments
+        use_cuda: (bool) whether to use CUDA
+    """
+    num_workers = min(multiprocessing.cpu_count(), args.n_workers)
+    kwargs = {"num_workers": num_workers, "pin_memory": True} if use_cuda else {}
+    return num_workers, kwargs
+
+# def set_workers(args):
