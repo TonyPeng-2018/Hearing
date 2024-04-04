@@ -84,6 +84,14 @@ def save_graph(train_metrics, test_metrics, save_dir):
     plt.close(fig)
 
 def import_attr(import_path):
+    """
+    Imports an attribute from a module.
+    Args:
+        import_path: (string) path to the attribute to import
+    Returns:
+        The attribute to import
+    """
+
     module, attr = import_path.rsplit('.', 1)
     return getattr(importlib.import_module(module), attr)
 

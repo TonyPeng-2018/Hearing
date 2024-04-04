@@ -21,3 +21,11 @@
 pip install black
 black .
 ```
+
+### Add comment
+**Please add comment using docly.**
+
+```bash
+pip install docly
+docly *.py
+```

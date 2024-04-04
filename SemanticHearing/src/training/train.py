@@ -36,7 +36,20 @@ def train_epoch(
     epoch: int = 0,
     writer: SummaryWriter = None,
 ) -> float:
+    """_summary_
 
+    Args:
+        model (nn.Module): _description_
+        device (torch.device): _description_
+        optimizer (optim.Optimizer): _description_
+        train_loader (torch.utils.data.dataloader.DataLoader): _description_
+        n_items (int): _description_
+        epoch (int, optional): _description_. Defaults to 0.
+        writer (SummaryWriter, optional): _description_. Defaults to None.
+
+    Returns:
+        float: _description_
+    """    
     """
     Train a single epoch.
     """
@@ -123,6 +136,14 @@ def train_epoch(
 
 
 def train(args: argparse.Namespace):
+    """_summary_
+
+    Args:
+        args (argparse.Namespace): _description_
+
+    Returns:
+        _type_: _description_
+    """    
     """
     Train the network.
     """
